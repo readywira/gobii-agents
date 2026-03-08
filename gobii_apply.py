@@ -5,7 +5,7 @@ Fetches "Ready to Apply" jobs from Airtable, dispatches a Gobii browser-use
 task for each one, polls for completion, then updates Airtable status.
 
 Usage:
-    python gobii_apply.py              # process all Ready to Apply (one at a time)
+    python gobii_apply.py              # process up to 5 Ready to Apply jobs
     python gobii_apply.py --limit 1    # test: one job only
     python gobii_apply.py --dry-run    # print prompt, don't dispatch task
 """
@@ -18,7 +18,7 @@ AUTH_FILE    = os.path.expanduser("~/.openclaw/agents/main/agent/auth-profiles.j
 PROFILE_PATH = os.path.expanduser("~/job_profile.json")
 
 DRY_RUN  = "--dry-run"  in sys.argv
-LIMIT    = 1
+LIMIT    = 5  # default batch cap — process at most 5 jobs per run to avoid overloading Gobii
 if "--limit" in sys.argv:
     idx = sys.argv.index("--limit")
     LIMIT = int(sys.argv[idx + 1])
@@ -152,7 +152,7 @@ def create_task(prompt):
         return gobii_post("/tasks/browser-use/", payload)
 
 
-def poll_task(task_id, timeout=1200, interval=15):
+def poll_task(task_id, timeout=900, interval=15):
     """Poll until completed/failed/cancelled or timeout."""
     # Use agent-scoped path if agent is configured, else global path
     if GOBII_AGENT_ID:
@@ -177,6 +177,32 @@ def poll_task(task_id, timeout=1200, interval=15):
             print(f"    poll error: {e}")
         time.sleep(interval)
     return {"status": "timeout"}
+
+
+# ── Pre-flight URL check ──────────────────────────────────────────────────────
+_SKIP_DOMAINS = ["workday.com", "myworkdayjobs.com", "taleo.net", "icims.com"]
+
+def preflight_url(url):
+    """
+    Follow redirects (HEAD request) and check if the final URL lands on a skip-listed ATS.
+    Returns (proceed: bool, final_url: str, reason: str).
+    If the HTTP check itself fails, we proceed and let Gobii handle it.
+    """
+    try:
+        req = urllib.request.Request(
+            url, method="HEAD",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            final_url = r.url
+    except Exception:
+        return True, url, ""   # can't check — let Gobii try
+
+    final_lower = final_url.lower()
+    for domain in _SKIP_DOMAINS:
+        if domain in final_lower:
+            return False, final_url, f"Redirects to {domain}"
+    return True, final_url, ""
 
 
 # ── Prompt builder ────────────────────────────────────────────────────────────
@@ -271,6 +297,9 @@ URL     : {url}
   - Indeed native apply
   - Indeed → redirects to Greenhouse or Lever
   - Dice → standard forms, Greenhouse/Lever redirects
+  - Glassdoor → redirects to Greenhouse, Lever, or Ashby
+  - ZipRecruiter 1-click apply (apply.ziprecruiter.com flows)
+  - Wellfound (angel.co) standard apply and Greenhouse/Lever redirects
   - Direct URLs: greenhouse.io, lever.co, ashby.com
 
 🚫 SKIP & LOG (return status=REQUIRES_MANUAL) on these:
@@ -331,12 +360,23 @@ def main():
         cover_text  = fields.get("Cover Letter", "")
 
         if not resume_url:
-            print("  ⚠ No Resume PDF attached — skipping (mark as Requires Manual)")
-            at_patch(record_id, {"Status": "Requires Manual", "Notes": (fields.get("Notes","") + "\n⚠ No resume PDF — skipped by Gobii agent").strip()})
+            print("  ⚠ No Resume PDF attached — skipping (mark as Pending Review)")
+            at_patch(record_id, {"Status": "Pending Review", "Notes": (fields.get("Notes","") + "\n⚠ No resume PDF — skipped by Gobii agent").strip()})
             continue
 
         print(f"      Resume: {resume_url[:60]}…")
         print(f"      Cover:  {cover_url[:60] + '…' if cover_url else 'text only'}")
+
+        # Pre-flight: follow redirects and block known skip-listed ATS before using a task slot
+        proceed, final_url, skip_reason = preflight_url(apply_url)
+        if not proceed:
+            print(f"  ⏭ Pre-flight SKIP — {skip_reason}")
+            at_patch(record_id, {
+                "Status": "Pending Review",
+                "Notes": (fields.get("Notes", "") +
+                          f"\n⏭ Pre-flight skip: {skip_reason}\n↪ Final URL: {final_url}").strip()
+            })
+            continue
 
         prompt = build_prompt(record, resume_url, cover_url, cover_text)
 
@@ -364,9 +404,9 @@ def main():
             "Notes": (fields.get("Notes", "") + f"\n🤖 Gobii task: {task_id}").strip()
         })
 
-        # Poll for result
-        print("  Polling for result (up to 45 min)…")
-        result = poll_task(task_id, timeout=2700, interval=20)
+        # Poll for result (15 min max — LinkedIn/Greenhouse/Lever should finish in <5 min)
+        print("  Polling for result (up to 15 min)…")
+        result = poll_task(task_id, timeout=900, interval=15)
 
         final_status = result.get("status", "timeout")
         print(f"  Task finished: {final_status}")
