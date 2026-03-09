@@ -38,11 +38,13 @@ GOBII_AGENT_ID = _auth["gobii:default"].get("agent_id", "")
 _li   = _auth.get("linkedin:default", {})
 _ind  = _auth.get("indeed:default", {})
 _dice = _auth.get("dice:default", {})
+_wf   = _auth.get("wellfound:default", {})
 
 JOB_BOARD_CREDS = {
-    "linkedin": {"email": _li.get("email",""),  "password": _li.get("password","")},
-    "indeed":   {"email": _ind.get("email",""), "password": _ind.get("password","")},
-    "dice":     {"email": _dice.get("email",""), "password": _dice.get("password","")},
+    "linkedin":  {"email": _li.get("email",""),  "password": _li.get("password","")},
+    "indeed":    {"email": _ind.get("email",""), "password": _ind.get("password","")},
+    "dice":      {"email": _dice.get("email",""), "password": _dice.get("password","")},
+    "wellfound": {"email": _wf.get("email",""),  "password": _wf.get("password","")},
 }
 
 # Gobii secrets format: {domain: {username, password}}
@@ -58,6 +60,10 @@ if _ind.get("email"):
 if _dice.get("email"):
     GOBII_SECRETS["https://www.dice.com"] = {
         "username": _dice["email"], "password": _dice["password"]
+    }
+if _wf.get("email"):
+    GOBII_SECRETS["https://wellfound.com"] = {
+        "username": _wf["email"], "password": _wf["password"]
     }
 
 # ── Candidate profile ──────────────────────────────────────────────────────────
@@ -265,9 +271,10 @@ URL     : {url}
    - LinkedIn  → sign in: {JOB_BOARD_CREDS['linkedin']['email']} / {JOB_BOARD_CREDS['linkedin']['password']}
    - Indeed    → sign in: {JOB_BOARD_CREDS['indeed']['email']} / {JOB_BOARD_CREDS['indeed']['password']}
    - Dice      → sign in: {JOB_BOARD_CREDS['dice']['email'] or JOB_BOARD_CREDS['linkedin']['email']} / {JOB_BOARD_CREDS['dice']['password'] or JOB_BOARD_CREDS['linkedin']['password']}
+   - Wellfound (wellfound.com / angel.co) → sign in: {JOB_BOARD_CREDS['wellfound']['email']} / {JOB_BOARD_CREDS['wellfound']['password']}
    - Company ATS / any other site that requires account creation:
        Email: {APPLICANT['email']}   Password: Muteule@2026
-   Do NOT create a new account on LinkedIn, Indeed, or Dice — always sign in.
+   Do NOT create a new account on LinkedIn, Indeed, Dice, or Wellfound — always sign in.
 4. Fill every form field using candidate info above. Never skip a required field.
 5. RESUME UPLOAD: download and upload from the Resume PDF URL above.
    - If the site shows a "Upload Resume" or "Attach Resume" button, use it.
